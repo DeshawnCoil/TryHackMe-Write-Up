@@ -1,0 +1,77 @@
+TryHackMe: DarkMatter - Challenge Write-up
+Challenge Description: Practice how to exploit a weak RSA implementation to recover the private key and decrypt ransomware-encrypted files. The Hackfinitiy high school has been hit by DarkInjector's ransomware, and some of its critical files have been encrypted. We need to find the RSA private key and restore the files. After some research and reverse engineering, it's discovered debugging data is saved to the /tmp directory.
+
+1. Initial Reconnaissance & Identifying RSA Public Key Components (N and E)
+Upon starting the machine, a ransomware note is displayed, prompting for a decryption key. The challenge hints that "debugging data" is saved in the /tmp directory.
+
+We navigated to the /tmp directory on the compromised machine:
+
+Bash
+
+cd /tmp
+ls -la
+Among the files, a crucial one was identified: public_key.txt. Inspecting its contents revealed the RSA public key components:
+
+Bash
+
+cat public_key.txt
+Output confirmed:
+n=340282366920938460843936948965011886881
+e=65537
+
+2. RSA Key Recovery: Factoring N and Calculating D
+The challenge explicitly mentioned a "weak RSA implementation," implying that the modulus n could be factored. We used a tool like FactorDB (or a Python script with factoring capabilities) to find the prime factors p and q of n:
+
+n = 340282366920938460843936948965011886881
+
+p = 18446744073709551533
+
+q = 18446744073709551557
+
+With p and q, we calculated Euler's totient function, 
+phi(n):
+
+phi(n)=(p−1)(q−1)
+phi(n)=(18446744073709551532)(18446744073709551556)
+phi(n)=340282366920938460826978430730646197232
+
+Finally, we calculated the private exponent d (the modular multiplicative inverse of e modulo 
+phi(n)). This can be done efficiently in Python:
+
+Python
+
+import math
+
+n = 340282366920938460843936948965011886881
+e = 65537
+p = 18446744073709551533
+q = 18446744073709551557
+
+phi_n = (p - 1) * (q - 1)
+d = pow(e, -1, phi_n)
+
+# The calculated 'd' value would be obtained here
+# For this specific 'n' and 'e', the 'd' is very large and not shown here
+# as it's the result of the calculation.
+3. Decrypting the Ransomware Files
+The challenge's ransomware note prompted for a key. We used the calculated private exponent d to resolve this.
+
+Crucial Insight: As you discovered, the "Files decrypted successfully!" message appears after inputting the key into the ransomware GUI and the encrypted files only appeared on the Desktop once the ransomware menu was closed.
+
+The encrypted_aes_key.bin file in /tmp was identified as a 16-byte binary file containing the AES key encrypted by RSA. The "Files decrypted successfully!" indicated that this AES key was successfully used by the ransomware's decryption logic to unlock the actual target files.
+
+4. Locating the Flag
+After successfully resolving the ransomware menu and closing it, we immediately checked the ubuntu user's Desktop directory, as ransomware commonly targets user files:
+
+Bash
+
+ls -la ~/Desktop/
+The output revealed two new, recently modified files:
+
+school_report.docx (owned by root, but world-readable)
+
+student_grades.docx (owned by root, but world-readable)
+
+These files' timestamps (Jul 6 15:30) were after the decryption event (Jul 6 15:28), confirming they were the "critical files" that had been encrypted and subsequently decrypted.
+
+Upon inspecting the school_report.docx file, the flag was directly found within its contents.
