@@ -1,0 +1,65 @@
+Unmasking "Sneaky Patch": A Kernel Backdoor Forensics Challenge
+This challenge, "Sneaky Patch," plunged us into a high-value system compromise where traditional detection tools had failed, hinting at a deep kernel-level persistence. Our mission: uncover the hidden kernel backdoor on a live, air-gapped Kali Linux machine.
+
+Initial Reconnaissance (and a Red Herring)
+Upon gaining access, the first step was to examine running processes using ps aux. While most processes appeared standard for a Kali desktop, a few immediately caught the eye: two instances of python3 -m websockify running as root, listening on port 80 and proxying to a local VNC server (TigerVNC). This configuration, while suspicious in a production environment (and often seen in CTF labs for access), initially felt like a prime candidate for the backdoor. However, the true nature of the compromise lay deeper.
+
+Further investigation into the websockify processes using lsof revealed an established connection from the root-owned websockify process to an internal IP address (ip-10-100-1-193.eu-west-1.compute.internal), confirming active outbound communication. This cemented websockify as an attack vector, but likely not the kernel backdoor itself.
+
+A critical clue emerged when attempting to run netstat. The "command not found" error was a glaring red flag, indicating that a kernel-level rootkit was actively tampering with system utilities and hiding its presence. This solidified the initial premise that the compromise was indeed at the kernel level.
+
+The Smoking Gun: Root Cron Job and the "spatch" Module
+With traditional userland tools being unreliable, the focus shifted to persistence mechanisms. Examining the root user's cron jobs (sudo crontab -l -u root) yielded the definitive answer:
+
+Bash
+
+@reboot /bin/bash -c 'depmod -a && modprobe spatch && echo "id" > /proc/cipher_bd'
+This single line revealed everything:
+
+@reboot: The backdoor achieves persistence by ensuring it loads every time the system starts.
+
+modprobe spatch: This command directly loads a kernel module named spatch. This immediately stood out, matching the "Sneaky Patch" theme of the challenge. This was the suspected kernel backdoor.
+
+echo "id" > /proc/cipher_bd: This command showed how the attacker interacts with their backdoor. It writes the string "id" to a file located at /proc/cipher_bd. The /proc filesystem is a common way for kernel modules to expose interfaces to user space.
+
+Extracting the Flag
+Attempting to cat /proc/cipher_bd resulted in an "Input/output error," indicating that simply reading the file wasn't enough to get information. The cron job's action (echo "id" > /proc/cipher_bd) suggested that the module expected specific commands written to it.
+
+To understand the spatch module better and find potential commands, we located the module file itself:
+
+Bash
+
+ubuntu@tryhackme:~$ find /lib/modules/$(uname -r)/ -name "spatch.ko" 2>/dev/null
+/lib/modules/6.8.0-1016-aws/kernel/drivers/misc/spatch.ko
+Then, we used the strings utility to examine the human-readable text within the spatch.ko binary:
+
+Bash
+
+ubuntu@tryhackme:~$ strings /lib/modules/6.8.0-1016-aws/kernel/drivers/misc/spatch.ko | grep -i "flag\|thm\|ctf\|key\|secret\|cipher"
+get_flagH9
+cipher_bd
+/tmp/cipher_output.txt
+get_flag
+3[CIPHER BACKDOOR] Failed to create /proc entry
+6[CIPHER BACKDOOR] Module loaded. Write data to /proc/%s
+6[CIPHER BACKDOOR] Module unloaded.
+3[CIPHER BACKDOOR] Failed to read output file
+6[CIPHER BACKDOOR] Command Output: %s
+3[CIPHER BACKDOOR] No output captured.
+6[CIPHER BACKDOOR] Executing command: %s
+3[CIPHER BACKDOOR] Failed to setup usermode helper.
+6[CIPHER BACKDOOR] Format: echo "COMMAND" > /proc/cipher_bd
+6[CIPHER BACKDOOR] Try: echo "%s" > /proc/cipher_bd
+6[CIPHER BACKDOOR] Here's the secret: 54484d7b73757033725f736e33346b795f643030727d0a
+description=Cipher is always root
+author=Cipher
+# ... (other non-relevant output)
+This output was incredibly rich:
+
+Command Confirmation: The strings explicitly stated 6[CIPHER BACKDOOR] Format: echo "COMMAND" > /proc/cipher_bd and showed get_flag as a recognized command.
+
+Output Path Hint: /tmp/cipher_output.txt suggested where the backdoor might write its results.
+
+The Flag!: Most importantly, the line 6[CIPHER BACKDOOR] Here's the secret: 54484d7b73757033725f736e33346b795f643030727d0a contained a hexadecimal string. Decoding this hex string revealed the flag.
+
+Decoding 54484d7b73757033725f736e33346b795f643030727d0a yields: ***{*****_******_****}
