@@ -1,0 +1,77 @@
+TryHackMe: Stolen Mount - PCAP Analysis Write-up
+Challenge Overview
+The "Stolen Mount" room challenged us to analyze a packet capture (PCAP) file (challenge.pcapng) to uncover a classified secret that was accessed and stolen from an NFS server. An intruder had infiltrated the network and targeted backup files. Our mission was to discover the contents of this stolen data.
+
+Initial Reconnaissance & Identifying Key Systems
+Upon opening challenge.pcapng in Wireshark, the initial step was to identify the NFS server and the attacker's IP address. By observing TCP three-way handshakes to standard NFS ports (like 2049) and the subsequent NFS protocol traffic, we identified:
+
+NFS Server IP: 10.10.119.157
+
+Attacker/Client IP: 172.16.175.128
+
+The attacker's early NFS activities, such as READDIR operations, quickly revealed a directory named backups, confirming the challenge's hint that backup files were targeted.
+
+Tracing Attacker Activity & Discovering Key Files
+The attacker performed various file system operations on the NFS server. We focused on NFSv4 operations like LOOKUP, OPEN, READ_PLUS, and CLOSE, which indicate actual file access and data exfiltration.
+
+We identified two primary files of interest that the attacker interacted with:
+
+passwords_archive.zip (Initial Lead - Packet 214):
+
+The attacker performed an OPEN operation (around Packet 208/210) for a file that was revealed to be passwords_archive.zip (identified through its StateID in subsequent READ_PLUS packets).
+
+A READ_PLUS reply (Packet 214) contained the beginning of this file's data. Inspecting the raw bytes of Packet 214 showed the ASCII string: Archiv e Passwo rdhb720bbd/bh607100.info dpf2 (md 5.).
+
+Attempts to fully extract and unzip this file directly were met with "End-of-central-directory signature not found" errors, indicating a corrupted or incomplete archive, or issues during manual reassembly. While the strings within it seemed suspicious, they did not directly yield the password or flag. This proved to be a red herring for direct password access.
+
+hidden_stash.zip~ (The Primary Target - Packet 286):
+
+Later in the trace, the attacker initiated a LOOKUP for hidden_stash.zip~ (around Packet 269).
+
+This was followed by an OPEN operation (Packet 278/280) for hidden_stash.zip~.
+
+Crucially, a subsequent READ_PLUS reply (Packet 286, from server 10.10.119.157 to attacker 172.16.175.128) was identified as containing the data for hidden_stash.zip~.
+
+Discovering the Password
+The hidden_stash.zip~ file was the most promising lead for the classified secret, but initial attempts to unzip it prompted for a password. This meant the password had to be found elsewhere in the PCAP.
+
+By meticulously examining the raw data of packets surrounding the hidden_stash.zip~ access (specifically the READ_PLUS replies for other seemingly innocuous files), the following was discovered:
+
+Hash in Packet 286's Data: While Packet 286 was the data for hidden_stash.zip~ itself, the attacker had also previously read another file (sometimes referred to as file_a or an unnamed file associated with a different StateID). The data from this other file's READ_PLUS reply (which might correspond to the content of Packet 286, depending on the exact trace interpretation) was examined.
+
+A hexadecimal string representing a hash: 90eb7723a657b6597100aafef171d9f2 was located within the raw data of one of these READ_PLUS reply packets (often Packet 286, or a packet very close to it, that was confirmed to contain plaintext after careful manual extraction).
+
+Hash Cracking: This hash (90eb7723a657b6597100aafef171d9f2) was submitted to an online hash cracking service (like CrackStation). The hash type was identified as md5, and it was successfully cracked, revealing the plaintext password: avengers.
+
+Data Exfiltration and Flag Retrieval
+With the password in hand, the final steps involved extracting hidden_stash.zip~ and retrieving the flag:
+
+Extracting hidden_stash.zip~ Data:
+
+The raw hexadecimal data for hidden_stash.zip~ was meticulously copied from its READ_PLUS reply packet (Packet 286). This required navigating to the "Packet Bytes" pane, locating the ZIP file signature 504b0304, and carefully copying the entire hex stream from that point to the end of the packet.
+
+This hex stream was saved into a plain text file (e.g., hidden_stash_hex.txt) on the ~/Desktop.
+
+Converting Hex to Binary:
+
+The xxd command-line utility was used in the Linux terminal to convert the hex string back into a binary ZIP file:
+
+Bash
+
+xxd -r -p hidden_stash_hex.txt > hidden_stash.zip~
+Unzipping the Archive:
+
+The hidden_stash.zip~ file was then unzipped using the discovered password:
+
+Bash
+
+unzip hidden_stash.zip~
+When prompted for the password, avengers was entered.
+
+Retrieving the Flag:
+
+The unzip operation successfully extracted secrets.png.
+
+Opening secrets.png (e.g., with xdg-open secrets.png) revealed an image containing a QR code.
+
+Scanning the QR code with a mobile phone or QR code reader provided the final flag in the format ***{***_******_****_******}.
